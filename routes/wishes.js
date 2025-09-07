@@ -266,9 +266,19 @@ router.get('/stats/overview', async (req, res) => {
     const totalWishes = await db.collection('wishes').get();
     const approvedWishes = await db.collection('wishes').where('isApproved', '==', true).get();
     
-    const totalLikes = totalWishes.docs.reduce((sum, doc) => {
+    // Sum likes from wishes
+    const wishesLikes = totalWishes.docs.reduce((sum, doc) => {
       return sum + (doc.data().likes || 0);
     }, 0);
+
+    // Sum likes from media
+    const mediaSnapshot = await db.collection('media').get();
+    const mediaLikes = mediaSnapshot.docs.reduce((sum, doc) => {
+      const data = doc.data();
+      return sum + (data && typeof data.likes === 'number' ? data.likes : 0);
+    }, 0);
+
+    const totalLikes = wishesLikes + mediaLikes;
 
     const toneStats = {};
     const languageStats = {};
