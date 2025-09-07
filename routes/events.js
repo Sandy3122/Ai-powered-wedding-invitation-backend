@@ -1,12 +1,15 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { db } = require('../config/firebase');
+const admin = require('firebase-admin');
+// Helper function to get Firestore instance
+const getDb = () => admin.firestore();
 
 const router = express.Router();
 
 // Log event
 router.post('/', async (req, res) => {
   try {
+    const db = getDb();
     const { 
       eventType, 
       eventName, 
@@ -52,6 +55,7 @@ router.post('/', async (req, res) => {
 // Get events with optional filtering
 router.get('/', async (req, res) => {
   try {
+    const db = getDb();
     const { eventType, page, userId, sessionId, limit = 100, offset = 0 } = req.query;
     
     let query = db.collection('events');
@@ -104,6 +108,7 @@ router.get('/', async (req, res) => {
 // Get event statistics
 router.get('/stats', async (req, res) => {
   try {
+    const db = getDb();
     const { startDate, endDate } = req.query;
     
     let query = db.collection('events');

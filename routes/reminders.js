@@ -1,12 +1,15 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { db } = require('../config/firebase');
+const admin = require('firebase-admin');
+// Helper function to get Firestore instance
+const getDb = () => admin.firestore();
 
 const router = express.Router();
 
 // Submit email for reminders
 router.post('/', async (req, res) => {
   try {
+    const db = getDb();
     const { email, schedule } = req.body;
 
     // Validate required fields
@@ -49,6 +52,7 @@ router.post('/', async (req, res) => {
 // Get all reminders
 router.get('/', async (req, res) => {
   try {
+    const db = getDb();
     const snapshot = await db.collection('reminders')
       .orderBy('createdAt', 'desc')
       .get();
@@ -79,6 +83,7 @@ router.get('/', async (req, res) => {
 // Delete reminder
 router.delete('/:id', async (req, res) => {
   try {
+    const db = getDb();
     const doc = await db.collection('reminders').doc(req.params.id).get();
     
     if (!doc.exists) {

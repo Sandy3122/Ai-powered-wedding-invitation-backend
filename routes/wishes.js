@@ -1,12 +1,15 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { db } = require('../config/firebase');
+const admin = require('firebase-admin');
+// Helper function to get Firestore instance
+const getDb = () => admin.firestore();
 
 const router = express.Router();
 
 // Submit a new wish
 router.post('/', async (req, res) => {
   try {
+    const db = getDb();
     const { 
       name, 
       relation, 
@@ -66,6 +69,7 @@ router.post('/', async (req, res) => {
 // Get all wishes
 router.get('/', async (req, res) => {
   try {
+    const db = getDb();
     const { limit = 50, offset = 0, approved = true } = req.query;
     
     let query = db.collection('wishes');
@@ -106,6 +110,7 @@ router.get('/', async (req, res) => {
 // Get single wish
 router.get('/:id', async (req, res) => {
   try {
+    const db = getDb();
     const doc = await db.collection('wishes').doc(req.params.id).get();
     
     if (!doc.exists) {
@@ -135,6 +140,7 @@ router.get('/:id', async (req, res) => {
 // Update wish
 router.put('/:id', async (req, res) => {
   try {
+    const db = getDb();
     const { 
       name, 
       relation, 
@@ -186,6 +192,7 @@ router.put('/:id', async (req, res) => {
 // Delete wish
 router.delete('/:id', async (req, res) => {
   try {
+    const db = getDb();
     const doc = await db.collection('wishes').doc(req.params.id).get();
     
     if (!doc.exists) {
@@ -214,6 +221,7 @@ router.delete('/:id', async (req, res) => {
 // Like/Unlike wish
 router.post('/:id/like', async (req, res) => {
   try {
+    const db = getDb();
     const { action } = req.body; // 'like' or 'unlike'
     const wishId = req.params.id;
     
@@ -254,6 +262,7 @@ router.post('/:id/like', async (req, res) => {
 // Get wishes statistics
 router.get('/stats/overview', async (req, res) => {
   try {
+    const db = getDb();
     const totalWishes = await db.collection('wishes').get();
     const approvedWishes = await db.collection('wishes').where('isApproved', '==', true).get();
     

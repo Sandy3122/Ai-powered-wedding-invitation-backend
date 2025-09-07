@@ -2,29 +2,39 @@ const express = require('express');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const sharp = require('sharp');
-const { db, bucket } = require('../config/firebase');
+const admin = require('firebase-admin');
+const path = require('path');
 
 const router = express.Router();
+
+// Helper functions to get Firebase instances
+const getDb = () => admin.firestore();
+const getBucket = () => admin.storage().bucket();
 
 // Configure multer for memory storage
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB limit
+    fileSize: 50 * 1024 * 1024, // 50MB
   },
-  fileFilter: (req, file, cb) => {
-    // Allow images and videos
-    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image and video files are allowed'), false);
-    }
-  }
 });
 
 // Upload media to Firebase Storage and save metadata to Firestore
 router.post('/upload', upload.single('media'), async (req, res) => {
   try {
+    const db = getDb();
+    const bucket = getBucket();
+    
+    // Check if Firebase Storage is available
+    if (!bucket) {
+      return res.status(500).json({
+        success: false,
+        message: 'Firebase Storage is not configured. Please check your environment variables and Firebase setup.',
+        error: 'Storage bucket not available'
+      });
+    }
+
+    // Check if a file was uploaded
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -32,125 +42,45 @@ router.post('/upload', upload.single('media'), async (req, res) => {
       });
     }
 
-    const { title, type, date } = req.body;
     const file = req.file;
-    const fileId = uuidv4();
-    const fileExtension = file.originalname.split('.').pop();
-    const fileName = `${fileId}.${fileExtension}`;
-    
-    // Determine file type
-    const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'photo';
-    
-    // Upload to Firebase Storage
-    const fileUpload = bucket.file(`media/${fileName}`);
-    const stream = fileUpload.createWriteStream({
+    const fileExtension = path.extname(file.originalname);
+    const fileName = `${uuidv4()}${fileExtension}`;
+    const fileRef = bucket.file(fileName);
+
+    // Upload the file to Firebase Storage
+    await fileRef.save(file.buffer, {
       metadata: {
         contentType: file.mimetype,
-        metadata: {
-          originalName: file.originalname,
-          uploadedAt: new Date().toISOString()
-        }
-      }
+      },
     });
 
-    // Process image if it's a photo (resize and optimize)
-    let processedBuffer = file.buffer;
-    if (mediaType === 'photo') {
-      try {
-        processedBuffer = await sharp(file.buffer)
-          .resize(1200, 1200, { 
-            fit: 'inside',
-            withoutEnlargement: true 
-          })
-          .jpeg({ quality: 85 })
-          .toBuffer();
-      } catch (error) {
-        console.log('Image processing failed, using original:', error.message);
-        processedBuffer = file.buffer;
-      }
-    }
-
-    // Upload the file
-    await new Promise((resolve, reject) => {
-      stream.on('error', reject);
-      stream.on('finish', resolve);
-      stream.end(processedBuffer);
-    });
-
-    // Get download URL
-    const [url] = await fileUpload.getSignedUrl({
+    const [url] = await fileRef.getSignedUrl({
       action: 'read',
-      expires: '03-01-2500' // Far future date
+      expires: '03-09-2030', // Set an expiration date for the URL
     });
 
-    // Create thumbnail for photos
-    let thumbnailUrl = url;
-    if (mediaType === 'photo') {
-      try {
-        const thumbnailBuffer = await sharp(file.buffer)
-          .resize(300, 300, { 
-            fit: 'cover',
-            position: 'center'
-          })
-          .jpeg({ quality: 80 })
-          .toBuffer();
+    // Create a document in Firestore with the media information
+    const docRef = await db.collection('media').add({
+      fileName: file.originalname,
+      storageUrl: url,
+      mimeType: file.mimetype,
+      size: file.size,
+      uploadDate: new Date(),
+    });
 
-        const thumbnailUpload = bucket.file(`thumbnails/${fileId}.jpg`);
-        const thumbnailStream = thumbnailUpload.createWriteStream({
-          metadata: {
-            contentType: 'image/jpeg',
-            metadata: {
-              originalName: file.originalname,
-              uploadedAt: new Date().toISOString()
-            }
-          }
-        });
-
-        await new Promise((resolve, reject) => {
-          thumbnailStream.on('error', reject);
-          thumbnailStream.on('finish', resolve);
-          thumbnailStream.end(thumbnailBuffer);
-        });
-
-        const [thumbnailUrlResult] = await thumbnailUpload.getSignedUrl({
-          action: 'read',
-          expires: '03-01-2500'
-        });
-        thumbnailUrl = thumbnailUrlResult;
-      } catch (error) {
-        console.log('Thumbnail creation failed:', error.message);
-      }
-    }
-
-    // Save metadata to Firestore
-    const mediaData = {
-      id: fileId,
-      type: mediaType,
-      url: url,
-      thumbnail: thumbnailUrl,
-      title: title || `Untitled ${mediaType}`,
-      date: date || new Date().toISOString(),
-      likes: 0,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      originalName: file.originalname,
-      fileSize: file.size,
-      mimeType: file.mimetype
-    };
-
-    await db.collection('media').doc(fileId).set(mediaData);
-
-    res.status(201).json({
+    res.status(200).json({
       success: true,
-      message: 'Media uploaded successfully',
-      data: mediaData
+      message: 'Media uploaded successfully!',
+      data: {
+        downloadUrl: url,
+        docId: docRef.id
+      }
     });
-
   } catch (error) {
     console.error('Upload error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to upload media',
+      message: 'Error uploading media',
       error: error.message
     });
   }
@@ -159,8 +89,13 @@ router.post('/upload', upload.single('media'), async (req, res) => {
 // Get all media
 router.get('/', async (req, res) => {
   try {
+    const db = getDb();
+    const { limit = 50, offset = 0 } = req.query;
+    
     const snapshot = await db.collection('media')
-      .orderBy('createdAt', 'desc')
+      .orderBy('uploadDate', 'desc')
+      .limit(parseInt(limit))
+      .offset(parseInt(offset))
       .get();
 
     const media = [];
@@ -173,7 +108,8 @@ router.get('/', async (req, res) => {
 
     res.json({
       success: true,
-      data: media
+      data: media,
+      count: media.length
     });
   } catch (error) {
     console.error('Get media error:', error);
@@ -188,6 +124,7 @@ router.get('/', async (req, res) => {
 // Get single media item
 router.get('/:id', async (req, res) => {
   try {
+    const db = getDb();
     const doc = await db.collection('media').doc(req.params.id).get();
     
     if (!doc.exists) {
@@ -217,13 +154,15 @@ router.get('/:id', async (req, res) => {
 // Update media
 router.put('/:id', async (req, res) => {
   try {
-    const { title, date } = req.body;
+    const db = getDb();
+    const { fileName, description } = req.body;
+
     const updateData = {
       updatedAt: new Date()
     };
 
-    if (title) updateData.title = title;
-    if (date) updateData.date = date;
+    if (fileName) updateData.fileName = fileName;
+    if (description !== undefined) updateData.description = description;
 
     await db.collection('media').doc(req.params.id).update(updateData);
 
@@ -250,6 +189,9 @@ router.put('/:id', async (req, res) => {
 // Delete media
 router.delete('/:id', async (req, res) => {
   try {
+    const db = getDb();
+    const bucket = getBucket();
+    
     const doc = await db.collection('media').doc(req.params.id).get();
     
     if (!doc.exists) {
@@ -261,20 +203,14 @@ router.delete('/:id', async (req, res) => {
 
     const mediaData = doc.data();
     
-    // Delete from Firebase Storage
-    try {
-      const fileName = mediaData.url.split('/').pop().split('?')[0];
-      const filePath = `media/${fileName}`;
-      await bucket.file(filePath).delete();
-      
-      // Delete thumbnail if it exists
-      if (mediaData.thumbnail && mediaData.thumbnail !== mediaData.url) {
-        const thumbnailName = mediaData.thumbnail.split('/').pop().split('?')[0];
-        const thumbnailPath = `thumbnails/${thumbnailName}`;
-        await bucket.file(thumbnailPath).delete();
+    // Delete from Firebase Storage if URL exists
+    if (mediaData.storageUrl && bucket) {
+      try {
+        const fileName = mediaData.storageUrl.split('/').pop().split('?')[0];
+        await bucket.file(fileName).delete();
+      } catch (storageError) {
+        console.log('Storage deletion error (continuing):', storageError.message);
       }
-    } catch (storageError) {
-      console.log('Storage deletion error (continuing):', storageError.message);
     }
 
     // Delete from Firestore
@@ -297,6 +233,7 @@ router.delete('/:id', async (req, res) => {
 // Like/Unlike media
 router.post('/:id/like', async (req, res) => {
   try {
+    const db = getDb();
     const { action } = req.body; // 'like' or 'unlike'
     const mediaId = req.params.id;
     
