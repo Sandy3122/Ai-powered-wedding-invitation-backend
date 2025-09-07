@@ -66,6 +66,8 @@ router.post('/upload', upload.single('media'), async (req, res) => {
       mimeType: file.mimetype,
       size: file.size,
       uploadDate: new Date(),
+      isApproved: true,
+      likes: 0,
     });
 
     res.status(200).json({
@@ -155,7 +157,7 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const db = getDb();
-    const { fileName, description } = req.body;
+    const { fileName, description, isApproved } = req.body;
 
     const updateData = {
       updatedAt: new Date()
@@ -163,6 +165,7 @@ router.put('/:id', async (req, res) => {
 
     if (fileName) updateData.fileName = fileName;
     if (description !== undefined) updateData.description = description;
+    if (isApproved !== undefined) updateData.isApproved = isApproved;
 
     await db.collection('media').doc(req.params.id).update(updateData);
 
